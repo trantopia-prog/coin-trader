@@ -58,7 +58,12 @@ def test_console_mode_single_instance_and_shutdown(tmp_path):
                          creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if WINDOWS else 0)
     try:
         assert _wait_up(port), "서버가 뜨지 않음"
-        info = json.loads((tmp_path / "home" / "instance.json").read_text())
+        inst = tmp_path / "home" / "instance.json"
+        for _ in range(50):  # 서버 응답 직후 실행기가 instance.json 을 쓰기까지의 짧은 간격
+            if inst.exists():
+                break
+            time.sleep(0.1)
+        info = json.loads(inst.read_text())
         assert info["url"] == f"http://127.0.0.1:{port}"
         # 두 번째 실행은 새 서버를 띄우지 않고 기존 인스턴스를 알려주고 끝나야 한다
         second = subprocess.run([sys.executable, "-m", "app.launcher", "--console"], cwd=tmp_path, env=env,
