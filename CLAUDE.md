@@ -51,6 +51,8 @@ FastAPI app (`app/main.py`) wires every service in `build_services()` and stores
 
 **Risk** (`trading/risk.py`): only buys are blocked (when halted, coin flagged, over max order, or over position ratio). Sells are always allowed so positions can be exited. The daily loss limit resets at the KST date change. Upbit notices classified as `warning`/`delisting` by `news/base.classify_notice` call `risk.flag(symbol)`, and `release` unflags it.
 
+**Telegram** (`notify/telegram.py`): `TelegramNotifier` subscribes to bus `log`/`news` and maps them to event kinds: log levels `trade`/`error`/`risk` and notice importance `warning`/`delisting` become `notice`, and the daily summary is `daily`. Messages go through a single-worker queue that sends 1 msg/s and honors 429 `retry_after`. Config lives in `AppState["telegram"]` with the token encrypted by `KeyVault`; `.env` `TELEGRAM_BOT_TOKEN` overrides it. Engine halts and resumes are logged at level `risk`, so new halt paths should use `engine.log("risk", ...)`.
+
 **News** (`news/`): each `NewsCollector` runs in its own task, so one failure doesn't affect the others. Items are deduped by URL SHA-256. Coins are extracted from titles using the Upbit market list (`Screener.symbol_names`).
 
 ## Gotchas

@@ -164,6 +164,8 @@ def _ensure_env(prefer_gui: bool) -> None:
         "PAPER_INITIAL_KRW=10000000\n"
         "RISK_MAX_ORDER_KRW=1000000\nRISK_MAX_POSITION_RATIO=0.3\nRISK_DAILY_LOSS_LIMIT_PCT=5\n"
         "WATCH_MARKETS=KRW-BTC,KRW-ETH,KRW-XRP,KRW-SOL\n"
+        "# 텔레그램 알림은 대시보드 설정 화면에서 등록하는 것을 권장합니다 (암호화 저장).\n"
+        "TELEGRAM_BOT_TOKEN=\nTELEGRAM_CHAT_ID=\n"
         "CRYPTOPANIC_TOKEN=\nNEWS_INTERVAL_SEC=300\nDISCLOSURE_SCRAPE_URLS=\n"
         "HOST=127.0.0.1\nPORT=8000\n",
         encoding="utf-8",
@@ -291,7 +293,7 @@ class ServerThread:
 
 # ---------------------------------------------------------------------------- 트레이
 class TrayApp:
-    NOTIFY_LEVELS = ("trade", "error", "warning")
+    NOTIFY_LEVELS = ("trade", "error", "warning", "risk")
 
     def __init__(self, server: ServerThread, url: str, open_browser: bool):
         self.server = server
@@ -395,8 +397,8 @@ class TrayApp:
             while True:
                 topic, d = await q.get()
                 if topic == "log" and d.get("level") in self.NOTIFY_LEVELS:
-                    title = {"trade": "체결", "error": "오류", "warning": "주의"}[d["level"]]
-                    self._notify(title, d["message"], force=d["level"] == "trade")
+                    title = {"trade": "체결", "error": "오류", "warning": "주의", "risk": "거래 정지/재개"}[d["level"]]
+                    self._notify(title, d["message"], force=d["level"] in ("trade", "risk"))
                 elif topic == "news" and d.get("importance") in ("warning", "delisting"):
                     self._notify("거래소 공지 (매수 차단)", d["title"])
         finally:

@@ -14,7 +14,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-from app.api import routes_auth, routes_backtest, routes_market, routes_news, routes_trading, ws
+from app.api import routes_auth, routes_backtest, routes_market, routes_news, routes_notify, routes_trading, ws
 from app.config import DATA_DIR, WEB_DIR, get_settings
 from app.db import Database
 from app.events import EventBus
@@ -26,6 +26,7 @@ from app.news.disclosure import DisclosureCollector
 from app.news.google_rss import GoogleNewsCollector
 from app.news.service import NewsService
 from app.news.upbit_notice import UpbitNoticeCollector
+from app.notify.telegram import TelegramNotifier
 from app.security import KeyVault
 from app.services import Services
 from app.trading.broker import PaperBroker
@@ -76,7 +77,8 @@ async def build_services() -> Services:
         watch_symbols=lambda: [m.split("-", 1)[1] for m in settings.watch_market_list],
         on_flag=risk.flag,
     )
-    return Services(settings, db, bus, client, candles, screener, upbit_ws, risk, engine, news, vault)
+    telegram = TelegramNotifier(db, bus, vault, engine, settings)
+    return Services(settings, db, bus, client, candles, screener, upbit_ws, risk, engine, news, vault, telegram)
 
 
 @asynccontextmanager
@@ -86,6 +88,7 @@ async def lifespan(app: FastAPI):
     if svc.settings.admin_password == "change-me":
         log.warning("ADMIN_PASSWORD 가 기본값입니다. .env 에서 반드시 변경하세요.")
     ws_task = asyncio.create_task(svc.ws.run(), name="upbit-ws")
+    await svc.telegram.start()  # 엔진보다 먼저 구독해야 시작 직후 이벤트도 놓치지 않는다
     await svc.engine.start()
     await svc.news.start()
     log.info("시작 완료: 매매 모드=%s, 데이터 폴더=%s", svc.engine.mode, DATA_DIR)
@@ -94,6 +97,7 @@ async def lifespan(app: FastAPI):
     finally:
         await svc.news.stop()
         await svc.engine.stop()
+        await svc.telegram.stop()
         svc.ws.stop()
         ws_task.cancel()
         await asyncio.gather(ws_task, return_exceptions=True)
@@ -108,7 +112,7 @@ def create_app() -> FastAPI:
         SessionMiddleware, secret_key=settings.resolved_secret(), session_cookie="coin_session",
         max_age=60 * 60 * 24 * 7, same_site="strict", https_only=False,
     )
-    for r in (routes_auth, routes_market, routes_news, routes_trading, routes_backtest, ws):
+    for r in (routes_auth, routes_market, routes_news, routes_trading, routes_backtest, routes_notify, ws):
         app.include_router(r.router)
 
     @app.get("/", include_in_schema=False)

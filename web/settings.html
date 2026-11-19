@@ -75,6 +75,51 @@
   </section>
 
   <section class="panel">
+    <div class="panel-h"><h2>텔레그램 알림</h2><span class="grow"></span>
+      <span class="badge" :class="tg.enabled && tg.configured && tg.chat_id ? 'ok' : ''" x-text="tg.enabled && tg.configured && tg.chat_id ? '켜짐' : '꺼짐'"></span></div>
+    <div class="panel-b stack">
+      <details :open="!tg.configured">
+        <summary class="hint" style="cursor:pointer">설정 방법 (처음 한 번)</summary>
+        <ol class="hint" style="margin:8px 0 0;padding-left:18px;line-height:1.7">
+          <li>텔레그램에서 <b>@BotFather</b> 를 찾아 <code>/newbot</code> 을 보내고 안내에 따라 봇을 만듭니다.</li>
+          <li>받은 <b>봇 토큰</b>(예: <code>123456:ABC-...</code>)을 아래에 붙여넣습니다.</li>
+          <li>방금 만든 봇과의 대화창에서 <code>/start</code> 를 보낸 뒤 <b>채팅 ID 찾기</b>를 누릅니다.</li>
+          <li><b>저장</b> 후 <b>테스트 메시지</b>로 수신을 확인합니다.</li>
+        </ol>
+      </details>
+      <label class="field">봇 토큰 <span class="hint" x-show="tg.configured" x-text="'(등록됨: ' + tg.token_masked + ' · 바꿀 때만 입력)'"></span>
+        <input type="password" x-model="tgForm.token" autocomplete="off" :disabled="tg.from_env" :placeholder="tg.from_env ? '.env 에서 설정됨' : '123456789:AA...'"></label>
+      <div class="row">
+        <label class="field grow">채팅 ID<input x-model="tgForm.chat_id" placeholder="예: 123456789"></label>
+        <button style="align-self:end" @click="detectChat()" :disabled="tgBusy">채팅 ID 찾기</button>
+      </div>
+      <template x-if="tgChats.length">
+        <div class="row wrap"><span class="hint">찾은 채팅:</span>
+          <template x-for="c in tgChats" :key="c.chat_id"><button class="sm" @click="tgForm.chat_id = c.chat_id" x-text="(c.name || c.type) + ' (' + c.chat_id + ')'"></button></template>
+        </div>
+      </template>
+      <div>
+        <h3 style="margin-bottom:6px">받을 알림</h3>
+        <div class="row wrap gap-lg">
+          <template x-for="(label, key) in tg.event_labels" :key="key">
+            <label class="row"><input type="checkbox" x-model="tgForm.events[key]"> <span x-text="label"></span></label>
+          </template>
+        </div>
+      </div>
+      <label class="field" style="max-width:200px">일일 요약 시각 (KST)<select x-model.number="tgForm.daily_hour">
+        <template x-for="h in 24" :key="h"><option :value="h-1" x-text="(h-1) + '시'"></option></template></select></label>
+      <label class="row"><input type="checkbox" x-model="tgForm.enabled"> 텔레그램 알림 사용</label>
+      <div class="row wrap">
+        <button class="primary" @click="saveTelegram()" :disabled="tgBusy">저장</button>
+        <button @click="testTelegram()" :disabled="tgBusy || !tg.configured">테스트 메시지</button>
+        <button @click="dailyPreview()" :disabled="tgBusy || !tg.configured">일일 요약 지금 보내기</button>
+      </div>
+      <p class="hint" x-show="tg.last_error" style="color:var(--up)" x-text="'최근 전송 오류: ' + tg.last_error"></p>
+      <p class="hint">체결과 거래 정지 알림은 항상 보내고, 같은 오류나 공지는 5분에 한 번만 보냅니다. 봇 토큰은 암호화되어 저장됩니다.</p>
+    </div>
+  </section>
+
+  <section class="panel">
     <div class="panel-h"><h2>자산 추이 (30일)</h2><span class="badge" :class="st.mode==='live' ? 'live' : 'paper'" x-text="st.mode==='live' ? '실거래' : '모의투자'"></span></div>
     <div id="eq" style="height:220px"></div>
     <div class="empty" x-show="!eqCount">아직 기록이 없습니다 (1분마다 기록)</div>
@@ -93,10 +138,12 @@
 document.addEventListener('alpine:init', () => {
   Alpine.data('settings', () => ({
     st: {}, risk: {}, keys: {}, k: { access_key: '', secret_key: '', password: '' }, pw: '', paperKrw: 10000000, eqCount: 0, chart: null,
+    tg: { event_labels: {}, events: {} }, tgForm: { token: '', chat_id: '', events: {}, daily_hour: 9, enabled: false }, tgChats: [], tgBusy: false,
     async init() {
       window.addEventListener('engine-status', e => { this.st = e.detail; });
       await this.reload();
       this.keys = await API.get('/api/settings/keys');
+      await this.loadTelegram();
       this.drawEquity();
       window.addEventListener('theme-change', () => this.drawEquity());
     },
@@ -117,6 +164,38 @@ document.addEventListener('alpine:init', () => {
     async saveKeys() {
       const r = await guarded(() => API.put('/api/settings/keys', this.k), 'API 키를 저장했습니다');
       if (r) { this.k = { access_key: '', secret_key: '', password: '' }; this.keys = await API.get('/api/settings/keys'); this.reload(); }
+    },
+    async loadTelegram() {
+      this.tg = await API.get('/api/telegram');
+      this.tgForm = { token: '', chat_id: this.tg.chat_id, events: { ...this.tg.events }, daily_hour: this.tg.daily_hour,
+                      enabled: this.tg.enabled || (!this.tg.configured) };
+    },
+    async detectChat() {
+      this.tgBusy = true;
+      const r = await guarded(() => API.post('/api/telegram/detect', { token: this.tgForm.token || null }));
+      this.tgBusy = false;
+      if (!r) return;
+      this.tgChats = r.chats;
+      if (!r.chats.length) toast(`@${r.bot} 봇과의 대화창에서 /start 를 보낸 뒤 다시 눌러 주세요.`, 'warning', 8000);
+      else if (r.chats.length === 1) { this.tgForm.chat_id = r.chats[0].chat_id; toast('채팅 ID 를 찾았습니다. 저장을 눌러 주세요.'); }
+    },
+    async saveTelegram() {
+      this.tgBusy = true;
+      const f = this.tgForm;
+      const r = await guarded(() => API.put('/api/telegram', { enabled: f.enabled, chat_id: f.chat_id, token: f.token || null, events: f.events, daily_hour: f.daily_hour }), '텔레그램 설정을 저장했습니다');
+      this.tgBusy = false;
+      if (r) { this.tg = r; this.tgForm.token = ''; }
+    },
+    async testTelegram() {
+      this.tgBusy = true;
+      await guarded(() => API.post('/api/telegram/test'), '테스트 메시지를 보냈습니다. 텔레그램을 확인하세요.');
+      this.tgBusy = false;
+      this.tg = await API.get('/api/telegram');
+    },
+    async dailyPreview() {
+      this.tgBusy = true;
+      await guarded(() => API.post('/api/telegram/daily-preview'), '일일 요약을 보냈습니다');
+      this.tgBusy = false;
     },
     async resetPaper() {
       if (!confirm('모의투자 계좌를 초기화할까요?')) return;

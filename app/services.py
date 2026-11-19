@@ -12,6 +12,7 @@ from app.events import EventBus
 from app.market.candles import CandleService
 from app.market.screener import Screener
 from app.news.service import NewsService
+from app.notify.telegram import TelegramNotifier
 from app.security import KeyVault
 from app.trading.engine import TradingEngine
 from app.trading.risk import RiskManager
@@ -32,6 +33,7 @@ class Services:
     engine: TradingEngine
     news: NewsService
     vault: KeyVault
+    telegram: TelegramNotifier
 
 
 def get_svc(request: Request) -> Services:

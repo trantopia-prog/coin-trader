@@ -50,6 +50,8 @@ class Settings(BaseSettings):
     watch_markets: str = "KRW-BTC,KRW-ETH,KRW-XRP,KRW-SOL"
 
     cryptopanic_token: str = ""
+    telegram_bot_token: str = ""  # 비워두면 대시보드 설정 화면에서 등록 (암호화 저장)
+    telegram_chat_id: str = ""
     news_interval_sec: int = 300
     disclosure_scrape_urls: str = ""
 

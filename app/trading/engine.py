@@ -469,7 +469,10 @@ class TradingEngine:
             try:
                 eq = await self.equity()
                 self.last_equity = eq
+                was_halted = self.risk.halted
                 self.daily_pnl_pct = await self.risk.on_equity(self.mode, eq)
+                if self.risk.halted and not was_halted:
+                    await self.log("risk", f"거래 정지: {self.risk.halt_reason} — 신규 매수가 차단됩니다")
                 async with self.db.session() as s:
                     s.add(EquitySnapshot(mode=self.mode, equity=eq))
                     await s.commit()
@@ -490,7 +493,7 @@ class TradingEngine:
                     await self._update_order(o, f)
                     cancelled += 1
         sold = await self.liquidate_strategies() if liquidate else 0
-        await self.log("warning", f"긴급정지 실행: 미체결 {cancelled}건 취소, 전략 포지션 {sold}건 청산")
+        await self.log("risk", f"긴급정지 실행: 미체결 {cancelled}건 취소, 전략 포지션 {sold}건 청산")
         self.bus.publish("engine", await self.status())
         return {"cancelled": cancelled, "liquidated": sold}
 

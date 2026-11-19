@@ -246,7 +246,7 @@ async def emergency_stop(body: EmergencyIn, svc: Services = Depends(get_svc)):
 @router.post("/resume")
 async def resume(svc: Services = Depends(get_svc)):
     await svc.risk.resume()
-    await svc.engine.log("warning", "거래 재개")
+    await svc.engine.log("risk", "거래 재개: 신규 매수가 다시 허용됩니다")
     return await svc.engine.status()
 
 

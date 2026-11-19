@@ -146,7 +146,7 @@ document.addEventListener('alpine:init', () => {
     async init() {
       RT.on('engine', d => { this.st = d; window.dispatchEvent(new CustomEvent('engine-status', { detail: d })); });
       RT.on('_conn', c => { this.conn = c; });
-      RT.on('log', l => { if (l.level === 'trade' || l.level === 'error') toast(l.message, l.level, 6000); });
+      RT.on('log', l => { if (['trade', 'error', 'risk'].includes(l.level)) toast(l.message, l.level === 'risk' ? 'warning' : l.level, 6000); });
       RT.on('news', n => { if (['warning', 'delisting'].includes(n.importance)) toast('[공지] ' + n.title, 'warning', 10000); });
       const s = await API.get('/api/status').catch(() => null);
       if (s) this.st = s;
