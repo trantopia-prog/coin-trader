@@ -16,6 +16,7 @@ import asyncio
 import json
 import os
 import secrets
+import signal
 import socket
 import subprocess
 import sys
@@ -437,6 +438,10 @@ async def _count_enabled(svc) -> int:
 
 
 # ---------------------------------------------------------------------------- main
+def _raise_interrupt(*_):
+    raise KeyboardInterrupt
+
+
 def _self_test() -> None:
     """실행파일에 트레이/첫 실행 창/서버에 필요한 모듈과 리소스가 모두 들어있는지 확인한다."""
     import importlib
@@ -461,6 +466,8 @@ def _self_test() -> None:
 
 def main(argv: list[str] | None = None) -> None:
     _setup_stdio()
+    if hasattr(signal, "SIGBREAK"):  # Windows 콘솔의 Ctrl+Break 도 Ctrl+C 처럼 정상 종료 처리
+        signal.signal(signal.SIGBREAK, _raise_interrupt)
     ap = argparse.ArgumentParser(prog=APP_NAME)
     ap.add_argument("--console", action="store_true", help="트레이 없이 콘솔에서 실행")
     ap.add_argument("--no-browser", action="store_true", help="시작 시 브라우저를 열지 않음")
