@@ -459,7 +459,7 @@ def _self_test() -> None:
     for res in ("web/index.html", "web/js/common.js"):
         if not (base / res).exists():
             missing.append(f"리소스 없음: {res}")
-    print("SELF-TEST", "FAIL" if missing else "OK", *missing, sep="\n", flush=True)
+    print("SELF-TEST FAIL" if missing else "SELF-TEST OK", *missing, sep="\n", flush=True)  # 빌드 스크립트가 이 한 줄을 검사
     if missing:
         raise SystemExit(1)
 

@@ -86,7 +86,8 @@ def test_self_test_without_stdout_writes_log(tmp_path):
     log_path = tmp_path / "home" / "logs" / "coin-trader.log"
     log = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
     assert "SELF-TEST" in log, f"rc={r.returncode} stdout={r.stdout!r} stderr={r.stderr!r} log={log!r}"
-    assert r.returncode == (0 if "SELF-TEST\nOK" in log else 1)
+    assert "SELF-TEST OK" in log or "SELF-TEST FAIL" in log
+    assert r.returncode == (0 if "SELF-TEST OK" in log else 1)
 
 
 TRAY_SCRIPT = textwrap.dedent('''
