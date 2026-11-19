@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoinTrader 조건검색</title>
+<link rel="stylesheet" href="/css/app.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/alpinejs/3.14.1/cdn.min.js"></script>
+</head>
+<body>
+<div id="app-header"></div>
+<main class="page stack" x-data="screener" x-init="run()" x-cloak>
+  <section class="panel">
+    <div class="panel-h"><h2>조건검색</h2><span class="hint">원화마켓 전 종목 대상. RSI 조건은 거래대금 상위 30개 종목에만 적용됩니다 (업비트 요청 제한).</span></div>
+    <div class="panel-b">
+      <div class="form-grid">
+        <label class="field">최소 거래대금(24h, 억원)<input type="number" min="0" x-model.number="f.min_value_eok"></label>
+        <label class="field">최소 등락률 %<input type="number" step="0.1" x-model="f.min_change" placeholder="예: -5"></label>
+        <label class="field">최대 등락률 %<input type="number" step="0.1" x-model="f.max_change" placeholder="예: 10"></label>
+        <label class="field">RSI 이하<input type="number" min="0" max="100" x-model="f.rsi_below" placeholder="예: 30"></label>
+        <label class="field">RSI 이상<input type="number" min="0" max="100" x-model="f.rsi_above" placeholder="예: 70"></label>
+        <label class="field">RSI 캔들 주기<select x-model="f.rsi_interval"><template x-for="iv in ['minute15','minute60','minute240','day']" :key="iv"><option :value="iv" x-text="INTERVAL_LABEL[iv]"></option></template></select></label>
+        <label class="field">정렬<select x-model="f.sort"><option value="value_24h">거래대금</option><option value="change_rate">등락률</option></select></label>
+        <label class="field" style="align-self:end"><span class="row"><input type="checkbox" x-model="f.exclude_warning"> 유의종목 제외</span></label>
+      </div>
+      <div class="row wrap" style="margin-top:12px">
+        <button class="primary" @click="run()" :disabled="busy" x-text="busy ? '검색 중…' : '검색'"></button>
+        <span class="hint">프리셋</span>
+        <button class="sm" @click="preset('oversold')">과매도 (RSI≤30)</button>
+        <button class="sm" @click="preset('surge')">급등 (+5% 이상)</button>
+        <button class="sm" @click="preset('drop')">급락 (-5% 이하)</button>
+        <button class="sm" @click="preset('liquid')">거래대금 상위</button>
+      </div>
+    </div>
+  </section>
+  <section class="panel">
+    <div class="panel-h"><h2>결과 <span class="muted" x-text="rows.length + '개'"></span></h2></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>종목</th><th class="num">현재가</th><th class="num">등락률</th><th class="num">거래대금(24h)</th><th class="num" x-show="hasRsi">RSI</th><th>상태</th><th></th></tr></thead>
+        <tbody>
+          <template x-for="r in rows" :key="r.market"><tr>
+            <td><b x-text="r.korean_name"></b> <span class="muted" x-text="r.symbol"></span></td>
+            <td class="num" x-text="fmt.price(r.price)"></td>
+            <td class="num" :class="fmt.cls(r.change_rate)" x-text="fmt.pct(r.change_rate*100)"></td>
+            <td class="num" x-text="fmt.big(r.value_24h)"></td>
+            <td class="num" x-show="hasRsi" x-text="r.rsi ?? '-'"></td>
+            <td><span class="badge warn" x-show="r.warning || r.flagged" :title="r.flagged">유의</span>
+                <template x-for="c in r.caution" :key="c"><span class="badge" x-text="CAUTION[c] || c"></span></template></td>
+            <td class="right"><a :href="'/index.html?market=' + r.market">차트</a> · <a :href="'/backtest.html?market=' + r.market">백테스트</a> · <a :href="'/news.html?coin=' + r.symbol">뉴스</a></td>
+          </tr></template>
+        </tbody>
+      </table>
+      <div class="empty" x-show="!rows.length && !busy">조건에 맞는 종목이 없습니다</div>
+    </div>
+  </section>
+</main>
+<script src="/js/common.js"></script>
+<script>
+const CAUTION = { PRICE_FLUCTUATIONS: '가격급등락', TRADING_VOLUME_SOARING: '거래량급등', DEPOSIT_AMOUNT_SOARING: '입금량급등', GLOBAL_PRICE_DIFFERENCES: '해외가격차', CONCENTRATION_OF_SMALL_ACCOUNTS: '소수계정집중' };
+document.addEventListener('alpine:init', () => {
+  Alpine.data('screener', () => ({
+    f: { min_value_eok: 10, min_change: '', max_change: '', rsi_below: '', rsi_above: '', rsi_interval: 'minute60', sort: 'value_24h', exclude_warning: true },
+    rows: [], busy: false,
+    get hasRsi() { return this.rows.some(r => r.rsi !== undefined); },
+    preset(p) {
+      Object.assign(this.f, { min_change: '', max_change: '', rsi_below: '', rsi_above: '', sort: 'value_24h' });
+      if (p === 'oversold') this.f.rsi_below = 30;
+      if (p === 'surge') { this.f.min_change = 5; this.f.sort = 'change_rate'; }
+      if (p === 'drop') this.f.max_change = -5;
+      this.run();
+    },
+    async run() {
+      this.busy = true;
+      const f = this.f;
+      const r = await guarded(() => API.get('/api/screener?' + qs({
+        min_value_24h: (f.min_value_eok || 0) * 1e8, min_change: f.min_change, max_change: f.max_change,
+        rsi_below: f.rsi_below, rsi_above: f.rsi_above, rsi_interval: f.rsi_interval, sort: f.sort, exclude_warning: f.exclude_warning, limit: 100,
+      })));
+      this.busy = false;
+      if (r) this.rows = r;
+    },
+  }));
+});
+</script>
+</body>
+</html>

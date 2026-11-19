@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "coin-trader"
+version = "0.1.0"
+description = "업비트 Open API 기반 코인 자동매매 웹 대시보드"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "httpx>=0.27",
+    "websockets>=12",
+    "PyJWT>=2.8",
+    "sqlalchemy[asyncio]>=2.0",
+    "aiosqlite>=0.20",
+    "pydantic-settings>=2.2",
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "feedparser>=6.0",
+    "beautifulsoup4>=4.12",
+    "cryptography>=42",
+    "itsdangerous>=2.1",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "respx>=0.21"]
+desktop = ["pystray>=0.19", "pillow>=10"]
+build = ["pyinstaller>=6.10", "pystray>=0.19", "pillow>=10"]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = ["live_quote: 업비트 시세 API를 실제로 호출하는 스모크 테스트 (네트워크 필요)"]
+addopts = "-m 'not live_quote'"

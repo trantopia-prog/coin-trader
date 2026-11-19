@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoinTrader 뉴스·공시</title>
+<link rel="stylesheet" href="/css/app.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/alpinejs/3.14.1/cdn.min.js"></script>
+<style>
+  .news-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; align-items: start; }
+  @media (max-width: 900px) { .news-layout { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<div id="app-header"></div>
+<main class="page news-layout" x-data="news" x-init="init()" x-cloak>
+  <section class="panel">
+    <div class="panel-b" style="border-bottom:1px solid var(--border)">
+      <div class="row wrap">
+        <input type="search" class="grow" placeholder="키워드 검색 (예: 상장, 해킹, ETF)" x-model="f.q" @keydown.enter="load()" aria-label="키워드" style="min-width:180px">
+        <input placeholder="코인 심볼 (BTC)" x-model="f.coin" @change="f.coin=f.coin.toUpperCase(); load()" style="width:130px" aria-label="코인">
+        <select x-model="f.category" @change="load()" aria-label="분류"><option value="">전체 분류</option><option value="notice">거래소 공지</option><option value="disclosure">공시</option><option value="news">뉴스</option></select>
+        <select x-model="f.source" @change="load()" aria-label="출처"><option value="">전체 출처</option><template x-for="(l, k) in SOURCE" :key="k"><option :value="k" x-text="l"></option></template></select>
+        <label class="row"><input type="checkbox" x-model="f.important" @change="load()"> 중요만</label>
+        <button class="primary" @click="load()">검색</button>
+      </div>
+    </div>
+    <template x-for="n in items" :key="n.id"><article class="news-item" :style="n._new && 'background:var(--panel-2)'">
+      <a class="t" :href="n.url" target="_blank" rel="noopener noreferrer" x-text="n.title"></a>
+      <div class="meta">
+        <template x-if="IMPORTANCE[n.importance]"><span class="badge" :class="IMPORTANCE[n.importance][1]" x-text="IMPORTANCE[n.importance][0]"></span></template>
+        <span class="badge" x-text="SOURCE[n.source] || n.source"></span>
+        <template x-for="c in n.coins.slice(0, 6)" :key="c"><a class="badge" :href="'/index.html?market=KRW-' + c" x-text="c"></a></template>
+        <span x-show="n.sentiment !== null" :class="fmt.cls(n.sentiment)" x-text="n.sentiment > 0 ? '호재' : n.sentiment < 0 ? '악재' : ''"></span>
+        <span x-text="fmt.time(n.published_at)"></span>
+        <span x-show="n.summary" x-text="n.summary"></span>
+      </div>
+    </article></template>
+    <div class="empty" x-show="!items.length && !busy">결과가 없습니다. 수집 직후라면 잠시 후 다시 시도하거나 "지금 수집"을 누르세요.</div>
+    <div class="panel-b center" x-show="items.length && more"><button @click="loadMore()" :disabled="busy">더 보기</button></div>
+  </section>
+
+  <aside class="grid">
+    <section class="panel">
+      <div class="panel-h"><h2>수집기 상태</h2><span class="grow"></span><button class="sm" @click="refresh()" :disabled="refreshing" x-text="refreshing ? '수집 중…' : '지금 수집'"></button></div>
+      <template x-for="(s, k) in status.collectors" :key="k"><div class="panel-b row" style="border-bottom:1px solid var(--border)">
+        <span class="dot" :class="s.ok === null ? '' : s.ok ? 'on' : 'off'"></span>
+        <div class="grow"><b x-text="SOURCE[k] || k"></b>
+          <div class="hint" x-text="s.last_run ? '최근 ' + fmt.ago(s.last_run) + ' · 신규 ' + s.new + '건' : '대기 중'"></div>
+          <div class="hint up" x-show="s.error" x-text="s.error"></div></div>
+      </div></template>
+      <div class="panel-b hint">CryptoPanic 은 .env 의 CRYPTOPANIC_TOKEN 을 넣으면 활성화됩니다. DAXA·쟁글은 공식 API 가 없어 뉴스 검색과 (설정 시) 페이지 스크래핑으로 수집합니다.</div>
+    </section>
+    <section class="panel">
+      <div class="panel-h"><h2>매수 차단 종목</h2></div>
+      <div class="panel-b hint" x-show="!Object.keys(status.flagged || {}).length">없음</div>
+      <template x-for="(reason, sym) in status.flagged" :key="sym"><div class="panel-b" style="border-bottom:1px solid var(--border)">
+        <b x-text="sym"></b> <span class="badge warn">매수 차단</span><div class="hint" x-text="reason"></div></div></template>
+      <div class="panel-b hint">업비트 공지에서 유의종목 지정·거래지원 종료가 감지되면 자동매매와 수동 매수가 차단됩니다. 유의 해제 공지가 나오면 자동으로 풀립니다.</div>
+    </section>
+  </aside>
+</main>
+<script src="/js/common.js"></script>
+<script>
+document.addEventListener('alpine:init', () => {
+  Alpine.data('news', () => ({
+    f: { q: '', coin: new URLSearchParams(location.search).get('coin') || '', category: '', source: '', important: false },
+    items: [], status: { collectors: {}, flagged: {} }, busy: false, more: true, refreshing: false,
+    async init() {
+      await Promise.all([this.load(), this.loadStatus()]);
+      setInterval(() => this.loadStatus(), 15000);
+      RT.on('news', n => {
+        const f = this.f;
+        if ((f.coin && !n.coins.includes(f.coin)) || (f.category && n.category !== f.category) || (f.source && n.source !== f.source) || (f.important && n.importance === 'normal') || (f.q && !n.title.includes(f.q))) return;
+        this.items.unshift({ ...n, _new: true });
+      });
+    },
+    params(extra = {}) { const f = this.f; return qs({ q: f.q, coin: f.coin, category: f.category, source: f.source, important: f.important, limit: 50, ...extra }); },
+    async load() {
+      this.busy = true;
+      const r = await guarded(() => API.get('/api/news?' + this.params()));
+      this.busy = false;
+      if (r) { this.items = r; this.more = r.length === 50; }
+    },
+    async loadMore() {
+      const last = this.items[this.items.length - 1]; if (!last) return;
+      this.busy = true;
+      const r = await guarded(() => API.get('/api/news?' + this.params({ before_id: last.id })));
+      this.busy = false;
+      if (r) { this.items.push(...r); this.more = r.length === 50; }
+    },
+    async loadStatus() { this.status = await API.get('/api/news/status').catch(() => this.status); },
+    async refresh() {
+      this.refreshing = true;
+      const r = await guarded(() => API.post('/api/news/refresh'));
+      this.refreshing = false;
+      if (r) { toast('수집 완료: 신규 ' + Object.values(r).reduce((a, b) => a + b, 0) + '건'); this.load(); this.loadStatus(); }
+    },
+  }));
+});
+</script>
+</body>
+</html>

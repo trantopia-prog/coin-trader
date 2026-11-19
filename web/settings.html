@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoinTrader 설정</title>
+<link rel="stylesheet" href="/css/app.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/alpinejs/3.14.1/cdn.min.js"></script>
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<style>.settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 12px; align-items: start; }</style>
+</head>
+<body>
+<div id="app-header"></div>
+<main class="page settings" x-data="settings" x-init="init()" x-cloak>
+  <section class="panel">
+    <div class="panel-h"><h2>매매 모드</h2></div>
+    <div class="panel-b stack">
+      <div class="row"><span>현재</span><span class="badge" :class="st.mode==='live' ? 'live' : 'paper'" x-text="st.mode==='live' ? '실거래' : '모의투자'"></span></div>
+      <template x-if="st.mode==='paper'">
+        <div class="stack">
+          <p class="hint" x-show="!st.live_allowed">실거래로 전환하려면 서버의 .env 에 <code>TRADING_MODE=live</code> 를 설정하고 재시작해야 합니다.</p>
+          <p class="hint" x-show="st.live_allowed && !st.has_keys">업비트 API 키를 먼저 등록하세요.</p>
+          <div class="row" x-show="st.live_allowed && st.has_keys">
+            <input type="password" placeholder="관리자 비밀번호" x-model="pw" autocomplete="current-password" class="grow" aria-label="관리자 비밀번호">
+            <button class="danger solid" @click="goLive()">실거래 전환</button>
+          </div>
+          <p class="hint">실거래 모드에서는 실행 중인 모든 전략이 실제 자산으로 주문합니다. 전략 포지션은 모의/실거래가 따로 관리됩니다.</p>
+        </div>
+      </template>
+      <template x-if="st.mode==='live'"><button @click="goPaper()">모의투자로 전환</button></template>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-h"><h2>거래 정지 / 재개</h2></div>
+    <div class="panel-b stack">
+      <div class="row" x-show="st.risk && st.risk.halted"><span class="badge warn">정지됨</span><span x-text="st.risk && st.risk.halt_reason"></span></div>
+      <div class="row" x-show="st.risk && !st.risk.halted"><span class="badge ok">정상 동작 중</span></div>
+      <div class="row wrap">
+        <button class="danger solid" @click="estop(false)">긴급정지</button>
+        <button class="danger" @click="estop(true)">긴급정지 + 전략 포지션 청산</button>
+        <button class="primary" x-show="st.risk && st.risk.halted" @click="resume()">거래 재개</button>
+      </div>
+      <p class="hint">정지 중에는 신규 매수만 차단되고, 매도(청산)는 가능합니다. 일일 손실 한도에 도달하면 자동으로 정지됩니다.</p>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-h"><h2>리스크 한도</h2></div>
+    <div class="panel-b stack">
+      <div class="form-grid">
+        <label class="field">1회 최대 주문금액 (원, 0=무제한)<input type="number" min="0" step="10000" x-model.number="risk.max_order_krw"></label>
+        <label class="field">종목당 최대 비중 (0~1)<input type="number" min="0" max="1" step="0.05" x-model.number="risk.max_position_ratio"></label>
+        <label class="field">일일 손실 한도 % (0=끔)<input type="number" min="0" max="100" step="0.5" x-model.number="risk.daily_loss_limit_pct"></label>
+      </div>
+      <div class="row"><button class="primary" @click="saveRisk()">저장</button><span class="hint">일일 손익 기준: 매일 KST 자정 이후 첫 평가 자산</span></div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-h"><h2>업비트 API 키</h2></div>
+    <div class="panel-b stack">
+      <div class="row"><span>상태</span><span class="badge" :class="keys.configured ? 'ok' : ''" x-text="keys.configured ? '등록됨 ' + keys.access_key : '미등록'"></span>
+        <span class="hint" x-show="keys.from_env">(.env 에서 설정됨)</span></div>
+      <template x-if="!keys.from_env">
+        <div class="stack">
+          <label class="field">Access Key<input x-model="k.access_key" autocomplete="off"></label>
+          <label class="field">Secret Key<input type="password" x-model="k.secret_key" autocomplete="off"></label>
+          <label class="field">관리자 비밀번호<input type="password" x-model="k.password" autocomplete="current-password"></label>
+          <button class="primary" @click="saveKeys()">검증 후 저장</button>
+        </div>
+      </template>
+      <p class="hint">업비트 › 마이페이지 › Open API 관리에서 발급합니다. <b>허용 IP를 이 서버 IP로 제한</b>하고, <b>출금 권한은 절대 체크하지 마세요</b>. 키는 서버 DB 에 암호화되어 저장됩니다.</p>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-h"><h2>자산 추이 (30일)</h2><span class="badge" :class="st.mode==='live' ? 'live' : 'paper'" x-text="st.mode==='live' ? '실거래' : '모의투자'"></span></div>
+    <div id="eq" style="height:220px"></div>
+    <div class="empty" x-show="!eqCount">아직 기록이 없습니다 (1분마다 기록)</div>
+  </section>
+
+  <section class="panel" x-show="st.mode==='paper'">
+    <div class="panel-h"><h2>모의투자 계좌</h2></div>
+    <div class="panel-b stack">
+      <div class="row"><input type="number" min="10000" step="1000000" x-model.number="paperKrw" class="grow" aria-label="초기 원화"><button class="danger" @click="resetPaper()">계좌 초기화</button></div>
+      <p class="hint">모의 잔고와 모든 전략의 모의 포지션이 초기화됩니다.</p>
+    </div>
+  </section>
+</main>
+<script src="/js/common.js"></script>
+<script>
+document.addEventListener('alpine:init', () => {
+  Alpine.data('settings', () => ({
+    st: {}, risk: {}, keys: {}, k: { access_key: '', secret_key: '', password: '' }, pw: '', paperKrw: 10000000, eqCount: 0, chart: null,
+    async init() {
+      window.addEventListener('engine-status', e => { this.st = e.detail; });
+      await this.reload();
+      this.keys = await API.get('/api/settings/keys');
+      this.drawEquity();
+      window.addEventListener('theme-change', () => this.drawEquity());
+    },
+    async reload() { this.st = await API.get('/api/status'); this.risk = { ...this.st.risk.limits }; },
+    async goLive() {
+      if (!confirm('실거래로 전환합니다. 실행 중인 전략이 실제 자산으로 주문합니다. 계속할까요?')) return;
+      const r = await guarded(() => API.post('/api/mode', { mode: 'live', password: this.pw }), '실거래 모드로 전환했습니다');
+      this.pw = ''; if (r) { this.st = r; this.drawEquity(); }
+    },
+    async goPaper() { const r = await guarded(() => API.post('/api/mode', { mode: 'paper' }), '모의투자 모드로 전환했습니다'); if (r) { this.st = r; this.drawEquity(); } },
+    async estop(liquidate) {
+      if (!confirm(liquidate ? '긴급정지 후 모든 전략 포지션을 시장가로 청산합니다. 계속할까요?' : '긴급정지할까요?')) return;
+      await guarded(() => API.post('/api/emergency-stop', { liquidate }), '긴급정지 실행');
+      this.reload();
+    },
+    async resume() { const r = await guarded(() => API.post('/api/resume'), '거래를 재개했습니다'); if (r) this.st = r; },
+    async saveRisk() { await guarded(() => API.put('/api/risk', this.risk), '리스크 한도를 저장했습니다'); this.reload(); },
+    async saveKeys() {
+      const r = await guarded(() => API.put('/api/settings/keys', this.k), 'API 키를 저장했습니다');
+      if (r) { this.k = { access_key: '', secret_key: '', password: '' }; this.keys = await API.get('/api/settings/keys'); this.reload(); }
+    },
+    async resetPaper() {
+      if (!confirm('모의투자 계좌를 초기화할까요?')) return;
+      await guarded(() => API.post('/api/paper/reset', { krw: this.paperKrw }), '초기화했습니다');
+    },
+    async drawEquity() {
+      const rows = await API.get('/api/equity?days=30').catch(() => []);
+      this.eqCount = rows.length;
+      if (this.chart) this.chart.remove();
+      this.chart = LightweightCharts.createChart(document.getElementById('eq'), chartOptions({ localization: { locale: 'ko-KR', priceFormatter: p => fmt.krw(p) } }));
+      const s = this.chart.addAreaSeries({ lineColor: cssVar('--accent'), topColor: cssVar('--accent') + '44', bottomColor: cssVar('--accent') + '05', lineWidth: 2 });
+      const seen = new Set();
+      s.setData(rows.map(r => ({ time: Math.floor(new Date(r.ts).getTime() / 1000) + KST_OFFSET, value: r.equity }))
+        .filter(p => (seen.has(p.time) ? false : seen.add(p.time))));
+      this.chart.timeScale().fitContent();
+    },
+  }));
+});
+</script>
+</body>
+</html>

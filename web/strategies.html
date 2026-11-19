@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoinTrader 자동매매</title>
+<link rel="stylesheet" href="/css/app.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/alpinejs/3.14.1/cdn.min.js"></script>
+</head>
+<body>
+<div id="app-header"></div>
+<main class="page stack" x-data="strategies" x-init="init()" x-cloak>
+  <div class="cards">
+    <div class="card"><div class="k">실행 중 전략</div><div class="v num"><span x-text="list.filter(s=>s.enabled).length"></span> / <span x-text="list.length"></span></div></div>
+    <div class="card"><div class="k">전략 평가손익</div><div class="v num" :class="fmt.cls(sum('unrealized_pnl'))" x-text="fmt.krw(sum('unrealized_pnl'))"></div></div>
+    <div class="card"><div class="k">전략 실현손익</div><div class="v num" :class="fmt.cls(sum('realized_pnl'))" x-text="fmt.krw(sum('realized_pnl'))"></div></div>
+    <div class="card"><div class="k">전략 투입금액</div><div class="v num" x-text="fmt.krw(list.reduce((a,s)=>a+s.pos_volume*s.avg_price,0))"></div></div>
+  </div>
+
+  <section class="panel">
+    <div class="panel-h"><h2>자동매매 전략</h2><span class="grow"></span><button class="primary" @click="openForm()">+ 새 전략</button></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>상태</th><th>이름</th><th>전략</th><th>종목</th><th>주기</th><th class="num">예산</th><th class="num">보유수량</th><th class="num">평균단가</th><th class="num">현재가</th><th class="num">평가손익</th><th class="num">실현손익</th><th></th></tr></thead>
+        <tbody>
+          <template x-for="s in list" :key="s.id"><tr>
+            <td><span class="badge" :class="s.enabled ? 'ok' : ''" x-text="s.enabled ? '실행 중' : '정지'"></span>
+                <span class="badge warn" x-show="s.error" :title="s.error">오류</span></td>
+            <td><b x-text="s.name"></b></td>
+            <td x-text="s.label"></td>
+            <td><a :href="'/index.html?market=' + s.market" x-text="s.market"></a></td>
+            <td x-text="INTERVAL_LABEL[s.interval]"></td>
+            <td class="num" x-text="fmt.krw(s.budget_krw)"></td>
+            <td class="num" x-text="s.pos_volume ? fmt.vol(s.pos_volume) : '-'"></td>
+            <td class="num" x-text="s.avg_price ? fmt.price(s.avg_price) : '-'"></td>
+            <td class="num" x-text="fmt.price(s.price)"></td>
+            <td class="num" :class="fmt.cls(s.unrealized_pnl)" x-text="s.pos_volume ? fmt.krw(s.unrealized_pnl) : '-'"></td>
+            <td class="num" :class="fmt.cls(s.realized_pnl)" x-text="fmt.krw(s.realized_pnl)"></td>
+            <td class="right">
+              <button class="sm" :class="!s.enabled && 'primary'" @click="toggle(s)" x-text="s.enabled ? '정지' : '시작'"></button>
+              <button class="sm" x-show="s.pos_volume > 0" @click="liquidate(s)">청산</button>
+              <button class="sm" @click="openForm(s)">편집</button>
+              <a class="btn sm" :href="backtestUrl(s)" style="font-size:12px;padding:3px 8px">백테스트</a>
+              <button class="sm danger" @click="remove(s)">삭제</button>
+            </td>
+          </tr></template>
+        </tbody>
+      </table>
+      <div class="empty" x-show="!list.length">등록된 전략이 없습니다. "+ 새 전략"으로 시작하세요. 먼저 백테스트로 검증하는 것을 권장합니다.</div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-h"><h2>전략 로그</h2></div>
+    <div style="max-height:320px;overflow:auto">
+      <template x-for="l in logs" :key="l.id"><div class="log-line" :class="l.level"><span class="muted" x-text="fmt.time(l.ts)"></span> <span x-text="l.message"></span></div></template>
+      <div class="empty" x-show="!logs.length">로그가 없습니다</div>
+    </div>
+  </section>
+
+  <!-- 생성/편집 모달 -->
+  <template x-if="form">
+    <div class="modal-bg" @click.self="form=null" @keydown.escape.window="form=null">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="ft">
+        <div class="panel-h"><h2 id="ft" x-text="form.id ? '전략 편집' : '새 전략'"></h2><span class="grow"></span><button class="ghost" @click="form=null" aria-label="닫기">✕</button></div>
+        <div class="panel-b">
+          <div class="form-grid">
+            <label class="field">이름<input x-model="form.name" maxlength="64"></label>
+            <label class="field">전략 유형<select x-model="form.type" @change="onType()">
+              <template x-for="t in types" :key="t.type"><option :value="t.type" x-text="t.label"></option></template></select></label>
+            <label class="field">종목<input x-model="form.market" list="mk" @change="form.market=form.market.toUpperCase()"></label>
+            <label class="field">캔들 주기<select x-model="form.interval">
+              <template x-for="iv in Object.keys(INTERVAL_LABEL)" :key="iv"><option :value="iv" x-text="INTERVAL_LABEL[iv]"></option></template></select></label>
+            <label class="field">예산 (원)<input type="number" min="5000" step="10000" x-model.number="form.budget_krw"></label>
+          </div>
+          <p class="hint" x-text="(StrategyForm.spec(form.type)||{}).description"></p>
+          <h3>파라미터</h3>
+          <div class="form-grid">
+            <template x-for="p in (StrategyForm.spec(form.type)||{params:[]}).params" :key="p.key">
+              <label class="field" :title="p.help">
+                <span x-text="p.label"></span>
+                <template x-if="p.type==='select'"><select x-model="form.params[p.key]"><template x-for="o in p.options" :key="o"><option :value="o" x-text="o"></option></template></select></template>
+                <template x-if="p.type==='bool'"><input type="checkbox" x-model="form.params[p.key]"></template>
+                <template x-if="p.type==='int' || p.type==='float'"><input type="number" :step="p.type==='int' ? 1 : 'any'" :min="p.min" :max="p.max" x-model.number="form.params[p.key]"></template>
+                <span class="hint" x-show="p.help" x-text="p.help"></span>
+              </label>
+            </template>
+          </div>
+          <div class="row"><span class="grow"></span><button @click="form=null">취소</button><button class="primary" @click="save()">저장</button></div>
+          <p class="hint">저장 후 목록에서 "시작"을 눌러야 매매가 시작됩니다. 실행 중인 전략의 파라미터 변경은 다음 평가부터 반영됩니다.</p>
+        </div>
+      </div>
+    </div>
+  </template>
+  <datalist id="mk"><template x-for="m in markets" :key="m.market"><option :value="m.market" x-text="m.korean_name"></option></template></datalist>
+</main>
+<script src="/js/common.js"></script>
+<script src="/js/strategy-form.js"></script>
+<script>
+document.addEventListener('alpine:init', () => {
+  Alpine.data('strategies', () => ({
+    list: [], types: [], markets: [], logs: [], form: null,
+    sum(k) { return this.list.reduce((a, s) => a + (s[k] || 0), 0); },
+    async init() {
+      this.types = await StrategyForm.load();
+      this.markets = await API.get('/api/markets?limit=500').catch(() => []);
+      await Promise.all([this.load(), this.loadLogs()]);
+      setInterval(() => this.load(), 5000);
+      RT.on('log', l => { if (l.strategy_id) { this.logs.unshift(l); this.logs.length = Math.min(this.logs.length, 300); } });
+      RT.on('order', () => this.load());
+    },
+    async load() { this.list = await API.get('/api/strategies').catch(() => this.list); },
+    async loadLogs() { this.logs = (await API.get('/api/logs?limit=300').catch(() => [])).filter(l => l.strategy_id); },
+    async openForm(s) {
+      if (s) this.form = { id: s.id, name: s.name, type: s.type, market: s.market, interval: s.interval, budget_krw: s.budget_krw, params: { ...StrategyForm.defaults(s.type), ...s.params } };
+      else {
+        const t = this.types[0];
+        this.form = { id: null, name: t.label + ' ' + (this.list.length + 1), type: t.type, market: 'KRW-BTC', interval: t.default_interval, budget_krw: 100000, params: StrategyForm.defaults(t.type) };
+      }
+    },
+    async onType() {
+      const t = StrategyForm.spec(this.form.type);
+      this.form.interval = t.default_interval;
+      this.form.params = await StrategyForm.suggest(this.form.type, this.form.market, StrategyForm.defaults(this.form.type));
+    },
+    async save() {
+      const f = this.form;
+      f.params = await StrategyForm.suggest(f.type, f.market, f.params);
+      const body = { name: f.name, type: f.type, market: f.market.toUpperCase(), interval: f.interval, budget_krw: f.budget_krw, params: f.params };
+      const r = await guarded(() => (f.id ? API.put('/api/strategies/' + f.id, body) : API.post('/api/strategies', body)), '저장했습니다');
+      if (r) { this.form = null; this.load(); }
+    },
+    async toggle(s) {
+      if (!s.enabled && !confirm(`"${s.name}" 전략을 시작할까요?\n예산 ${fmt.krw(s.budget_krw)}원 한도 내에서 자동 주문이 실행됩니다.`)) return;
+      await guarded(() => API.post(`/api/strategies/${s.id}/${s.enabled ? 'stop' : 'start'}`));
+      this.load();
+    },
+    async liquidate(s) {
+      if (!confirm(`"${s.name}" 전략을 정지하고 보유분을 시장가로 전량 매도할까요?`)) return;
+      await guarded(() => API.post(`/api/strategies/${s.id}/stop?liquidate=true`), '청산 요청 완료');
+      this.load();
+    },
+    async remove(s) {
+      if (!confirm(`"${s.name}" 전략을 삭제할까요?`)) return;
+      await guarded(() => API.del('/api/strategies/' + s.id), '삭제했습니다');
+      this.load();
+    },
+    backtestUrl(s) { return '/backtest.html?' + qs({ type: s.type, market: s.market, interval: s.interval, params: JSON.stringify(s.params) }); },
+  }));
+});
+</script>
+</body>
+</html>

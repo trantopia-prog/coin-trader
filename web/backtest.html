@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoinTrader 백테스트</title>
+<link rel="stylesheet" href="/css/app.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/alpinejs/3.14.1/cdn.min.js"></script>
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+<div id="app-header"></div>
+<main class="page stack" x-data="bt" x-init="init()" x-cloak>
+  <section class="panel">
+    <div class="panel-h"><h2>백테스트</h2><span class="hint">라이브 엔진과 같은 전략 코드로 과거 캔들을 재생합니다. 봉 내부는 시가→저/고→종가 경로로 가정합니다.</span></div>
+    <div class="panel-b stack">
+      <div class="form-grid">
+        <label class="field">전략<select x-model="f.type" @change="onType()"><template x-for="t in types" :key="t.type"><option :value="t.type" x-text="t.label"></option></template></select></label>
+        <label class="field">종목<input x-model="f.market" list="mk" @change="f.market=f.market.toUpperCase()"></label>
+        <label class="field">캔들 주기<select x-model="f.interval"><template x-for="iv in Object.keys(INTERVAL_LABEL)" :key="iv"><option :value="iv" x-text="INTERVAL_LABEL[iv]"></option></template></select></label>
+        <label class="field">캔들 개수 (최대 2000)<input type="number" min="30" max="2000" x-model.number="f.count"></label>
+        <label class="field">초기 자금<input type="number" min="10000" step="100000" x-model.number="f.initial"></label>
+        <label class="field">수수료율<input type="number" step="0.0001" min="0" x-model.number="f.fee_rate"></label>
+        <label class="field">슬리피지<input type="number" step="0.0005" min="0" x-model.number="f.slippage"></label>
+      </div>
+      <h3>파라미터</h3>
+      <div class="form-grid">
+        <template x-for="p in (spec||{params:[]}).params" :key="p.key">
+          <label class="field" :title="p.help"><span x-text="p.label"></span>
+            <template x-if="p.type==='select'"><select x-model="f.params[p.key]"><template x-for="o in p.options" :key="o"><option :value="o" x-text="o"></option></template></select></template>
+            <template x-if="p.type==='bool'"><input type="checkbox" x-model="f.params[p.key]"></template>
+            <template x-if="p.type==='int' || p.type==='float'"><input type="number" :step="p.type==='int' ? 1 : 'any'" :min="p.min" :max="p.max" x-model.number="f.params[p.key]"></template>
+          </label>
+        </template>
+      </div>
+      <div class="row wrap">
+        <button class="primary" @click="run()" :disabled="busy" x-text="busy ? '실행 중…' : '백테스트 실행'"></button>
+        <button x-show="res" @click="makeStrategy()">이 설정으로 전략 만들기</button>
+      </div>
+    </div>
+  </section>
+
+  <template x-if="res">
+    <div class="cards">
+      <div class="card"><div class="k">총 수익률</div><div class="v num" :class="fmt.cls(m.total_return_pct)" x-text="fmt.pct(m.total_return_pct)"></div></div>
+      <div class="card"><div class="k">단순보유 수익률</div><div class="v num" :class="fmt.cls(m.buy_hold_return_pct)" x-text="fmt.pct(m.buy_hold_return_pct)"></div></div>
+      <div class="card"><div class="k">최대낙폭 (MDD)</div><div class="v num down" x-text="fmt.pct(m.mdd_pct)"></div></div>
+      <div class="card"><div class="k">샤프 지수</div><div class="v num" x-text="m.sharpe.toFixed(2)"></div></div>
+      <div class="card"><div class="k">승률 (청산 기준)</div><div class="v num" x-text="m.win_rate_pct.toFixed(1) + '% (' + m.round_trips + '회)'"></div></div>
+      <div class="card"><div class="k">손익비 (PF)</div><div class="v num" x-text="m.profit_factor === null ? '-' : m.profit_factor.toFixed(2)"></div></div>
+      <div class="card"><div class="k">최종 자산</div><div class="v num" x-text="fmt.krw(m.final_equity)"></div></div>
+      <div class="card"><div class="k">수수료 합계</div><div class="v num" x-text="fmt.krw(m.fees)"></div></div>
+    </div>
+  </template>
+  <section class="panel" x-show="res">
+    <div class="panel-h"><h2>가격 및 매매 시점</h2><span class="hint" x-text="res ? fmt.time(m.start) + ' ~ ' + fmt.time(m.end) + ' · ' + m.bars + '봉' : ''"></span></div>
+    <div id="pchart" style="height:380px"></div>
+    <div class="panel-h" style="border-top:1px solid var(--border)"><h2>자산 곡선</h2></div>
+    <div id="echart" style="height:200px"></div>
+  </section>
+  <section class="panel" x-show="res">
+    <div class="panel-h"><h2>거래 내역 <span class="muted" x-text="res ? res.trades.length + '건' : ''"></span></h2></div>
+    <div class="table-wrap" style="max-height:360px">
+      <table>
+        <thead><tr><th>시간</th><th>구분</th><th class="num">체결가</th><th class="num">수량</th><th class="num">금액</th><th class="num">손익</th><th>사유</th></tr></thead>
+        <tbody><template x-for="(t, i) in (res ? res.trades : [])" :key="i"><tr>
+          <td x-text="fmt.time(t.time)"></td><td :class="t.side==='buy' ? 'up' : 'down'" x-text="t.side==='buy' ? '매수' : '매도'"></td>
+          <td class="num" x-text="fmt.price(t.price)"></td><td class="num" x-text="fmt.vol(+t.volume.toFixed(8))"></td>
+          <td class="num" x-text="fmt.krw(t.amount)"></td><td class="num" :class="fmt.cls(t.pnl)" x-text="t.pnl === undefined ? '' : fmt.krw(t.pnl)"></td>
+          <td class="muted" x-text="t.reason"></td></tr></template></tbody>
+      </table>
+    </div>
+  </section>
+  <datalist id="mk"><template x-for="mk in markets" :key="mk.market"><option :value="mk.market" x-text="mk.korean_name"></option></template></datalist>
+</main>
+<script src="/js/common.js"></script>
+<script src="/js/strategy-form.js"></script>
+<script>
+const BC = { p: null, e: null };
+document.addEventListener('alpine:init', () => {
+  Alpine.data('bt', () => ({
+    types: [], markets: [], busy: false, res: null,
+    f: { type: 'volatility_breakout', market: 'KRW-BTC', interval: 'day', count: 365, initial: 1000000, fee_rate: 0.0005, slippage: 0.001, params: {} },
+    get spec() { return StrategyForm.spec(this.f.type); },
+    get m() { return this.res ? this.res.metrics : {}; },
+    async init() {
+      this.types = await StrategyForm.load();
+      this.markets = await API.get('/api/markets?limit=500').catch(() => []);
+      const u = new URLSearchParams(location.search);
+      if (u.get('type')) this.f.type = u.get('type');
+      if (u.get('market')) this.f.market = u.get('market');
+      this.f.interval = u.get('interval') || this.spec.default_interval;
+      let p = {}; try { p = JSON.parse(u.get('params') || '{}'); } catch { /* 무시 */ }
+      this.f.params = await StrategyForm.suggest(this.f.type, this.f.market, { ...StrategyForm.defaults(this.f.type), ...p });
+      window.addEventListener('theme-change', () => this.res && this.draw());
+    },
+    async onType() {
+      this.f.interval = this.spec.default_interval;
+      this.f.params = await StrategyForm.suggest(this.f.type, this.f.market, StrategyForm.defaults(this.f.type));
+    },
+    async run() {
+      this.busy = true;
+      const r = await guarded(() => API.post('/api/backtest', { ...this.f, market: this.f.market.toUpperCase() }));
+      this.busy = false;
+      if (!r) return;
+      this.res = r;
+      this.f.params = r.params;
+      this.$nextTick(() => this.draw());
+    },
+    draw() {
+      const r = this.res;
+      if (BC.p) { BC.p.remove(); BC.e.remove(); }
+      const up = cssVar('--up'), down = cssVar('--down');
+      BC.p = LightweightCharts.createChart(document.getElementById('pchart'), chartOptions({ localization: { locale: 'ko-KR', priceFormatter: p => fmt.price(p) } }));
+      const cs = BC.p.addCandlestickSeries({ upColor: up, downColor: down, wickUpColor: up, wickDownColor: down, borderVisible: false });
+      cs.setData(r.candles.map(c => ({ time: c.time + KST_OFFSET, open: c.open, high: c.high, low: c.low, close: c.close })));
+      const seen = new Set();
+      cs.setMarkers(r.trades.filter(t => { const k = t.time + t.side; if (seen.has(k)) return false; seen.add(k); return true; })
+        .map(t => ({ time: t.time + KST_OFFSET, position: t.side === 'buy' ? 'belowBar' : 'aboveBar', shape: t.side === 'buy' ? 'arrowUp' : 'arrowDown', color: t.side === 'buy' ? up : down })));
+      BC.e = LightweightCharts.createChart(document.getElementById('echart'), chartOptions());
+      const es = BC.e.addAreaSeries({ lineColor: cssVar('--accent'), topColor: cssVar('--accent') + '44', bottomColor: cssVar('--accent') + '05', lineWidth: 2, priceLineVisible: false });
+      es.setData(r.equity.map(x => ({ time: x.time + KST_OFFSET, value: x.equity })));
+      es.createPriceLine({ price: r.metrics.initial, color: cssVar('--muted'), lineStyle: 2, lineWidth: 1, title: '초기자금' });
+      BC.p.timeScale().fitContent(); BC.e.timeScale().fitContent();
+      BC.p.timeScale().subscribeVisibleLogicalRangeChange(x => x && BC.e.timeScale().setVisibleLogicalRange(x));
+    },
+    async makeStrategy() {
+      const budget = prompt('전략 예산(원)을 입력하세요', '100000');
+      if (!budget) return;
+      const body = { name: `${this.spec.label} ${this.f.market}`, type: this.f.type, market: this.f.market.toUpperCase(), interval: this.f.interval, params: this.f.params, budget_krw: Number(budget) };
+      const r = await guarded(() => API.post('/api/strategies', body));
+      if (r) { toast('전략을 만들었습니다. 자동매매 화면에서 시작하세요.'); location.href = '/strategies.html'; }
+    },
+  }));
+});
+</script>
+</body>
+</html>

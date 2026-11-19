@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoinTrader 트레이딩</title>
+<link rel="stylesheet" href="/css/app.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/alpinejs/3.14.1/cdn.min.js"></script>
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+<div id="app-header"></div>
+
+<main class="trade" x-data="trade" x-init="init()" x-cloak>
+  <!-- 종목 목록 -->
+  <section class="panel markets" aria-label="종목 목록">
+    <div class="panel-b" style="padding-bottom:8px">
+      <input type="search" placeholder="코인명/심볼 검색 (예: 비트, ETH)" x-model="q" style="width:100%" aria-label="종목 검색">
+    </div>
+    <div class="tabs">
+      <button :class="listTab==='all' && 'on'" @click="listTab='all'">원화</button>
+      <button :class="listTab==='fav' && 'on'" @click="listTab='fav'">관심</button>
+      <button :class="listTab==='hold' && 'on'" @click="listTab='hold'">보유</button>
+      <span class="grow"></span>
+      <div class="seg" style="align-self:center">
+        <button :class="sortKey==='value_24h' && 'on'" @click="sortKey='value_24h'">거래대금</button>
+        <button :class="sortKey==='change_rate' && 'on'" @click="sortKey='change_rate'">등락</button>
+      </div>
+    </div>
+    <div class="list">
+      <template x-for="t in visibleTickers" :key="t.market">
+        <div class="mrow" :class="t.market===market && 'sel'" @click="selectMarket(t.market)">
+          <div class="n"><button class="star" :class="favs.includes(t.market) && 'on'" @click.stop="toggleFav(t.market)" :aria-label="'관심 ' + t.symbol">★</button><span x-text="t.korean_name"></span>
+            <span class="badge warn" x-show="t.warning || t.flagged" :title="t.flagged || '업비트 유의종목'">유의</span>
+            <span class="badge" x-show="!t.warning && t.caution && t.caution.length" :title="(t.caution||[]).join(', ')">주의</span></div>
+          <div class="num right" :class="fmt.cls(t.change_rate)" x-text="fmt.price(t.price)"></div>
+          <div class="s" x-text="t.symbol"></div>
+          <div class="s num right"><span :class="fmt.cls(t.change_rate)" x-text="fmt.pct(t.change_rate*100)"></span> · <span x-text="fmt.big(t.value_24h)"></span></div>
+        </div>
+      </template>
+      <div class="empty" x-show="!visibleTickers.length">종목이 없습니다</div>
+    </div>
+  </section>
+
+  <!-- 차트 -->
+  <section class="panel" aria-label="차트">
+    <div class="chart-head">
+      <h1 style="font-size:16px"><span x-text="info.korean_name || market"></span> <span class="muted" style="font-size:12px" x-text="market"></span></h1>
+      <span class="px num" :class="fmt.cls(head.change_rate)" x-text="fmt.price(head.price)"></span>
+      <span class="num" :class="fmt.cls(head.change_rate)" x-text="fmt.pct(head.change_rate*100)"></span>
+      <span class="muted">고가 <b class="num up" x-text="fmt.price(head.high)"></b></span>
+      <span class="muted">저가 <b class="num down" x-text="fmt.price(head.low)"></b></span>
+      <span class="muted">거래대금(24h) <b class="num" style="color:var(--text)" x-text="fmt.big(head.value_24h)"></b></span>
+      <a :href="'/backtest.html?market=' + market" class="hint" style="margin-left:auto">이 종목 백테스트 →</a>
+    </div>
+    <div class="chart-tools">
+      <div class="seg" role="group" aria-label="캔들 주기">
+        <template x-for="iv in intervals" :key="iv"><button :class="interval===iv && 'on'" @click="setInterval(iv)" x-text="INTERVAL_LABEL[iv]"></button></template>
+      </div>
+      <div class="seg" role="group" aria-label="지표">
+        <button :class="ind.ma && 'on'" @click="ind.ma=!ind.ma; applyIndicators()">이평 5·20·60</button>
+        <button :class="ind.bb && 'on'" @click="ind.bb=!ind.bb; applyIndicators()">볼린저</button>
+        <button :class="ind.vol && 'on'" @click="ind.vol=!ind.vol; applyIndicators()">거래량</button>
+        <button :class="ind.marks && 'on'" @click="ind.marks=!ind.marks; applyMarkers()">매매표시</button>
+      </div>
+      <div class="seg" role="group" aria-label="보조지표">
+        <button :class="ind.sub==='rsi' && 'on'" @click="ind.sub='rsi'; applyIndicators()">RSI</button>
+        <button :class="ind.sub==='macd' && 'on'" @click="ind.sub='macd'; applyIndicators()">MACD</button>
+      </div>
+    </div>
+    <div id="chart"></div>
+    <div id="subchart"></div>
+  </section>
+
+  <!-- 호가 / 주문 -->
+  <aside class="side grid" style="align-content:start">
+    <section class="panel" aria-label="호가">
+      <div class="panel-h"><h2>호가</h2><span class="hint">가격 클릭 시 주문가 입력</span></div>
+      <div class="ob">
+        <template x-for="u in asks" :key="'a'+u.ask_price"><div class="lv ask" @click="pickPrice(u.ask_price)">
+          <div class="bar" :style="`width:${u.w}%`"></div><span class="down" x-text="fmt.price(u.ask_price)"></span><span x-text="fmt.vol(+u.ask_size.toFixed(4))"></span></div></template>
+        <div class="mid num" :class="fmt.cls(head.change_rate)" x-text="fmt.price(head.price)"></div>
+        <template x-for="u in bids" :key="'b'+u.bid_price"><div class="lv bid" @click="pickPrice(u.bid_price)">
+          <div class="bar" :style="`width:${u.w}%`"></div><span class="up" x-text="fmt.price(u.bid_price)"></span><span x-text="fmt.vol(+u.bid_size.toFixed(4))"></span></div></template>
+      </div>
+    </section>
+
+    <section class="panel" aria-label="주문">
+      <div class="tabs">
+        <button :class="of.side==='bid' && 'on'" @click="of.side='bid'" style="color:var(--up)">매수</button>
+        <button :class="of.side==='ask' && 'on'" @click="of.side='ask'" style="color:var(--down)">매도</button>
+      </div>
+      <div class="panel-b order-form">
+        <div class="seg"><button :class="of.type==='limit' && 'on'" @click="of.type='limit'">지정가</button><button :class="of.type==='market' && 'on'" @click="of.type='market'">시장가</button></div>
+        <div class="row muted"><span>주문가능</span><span class="grow"></span>
+          <b class="num" style="color:var(--text)" x-text="of.side==='bid' ? fmt.krw(avail.krw) + ' 원' : fmt.vol(avail.coin) + ' ' + symbol"></b></div>
+        <label class="field" x-show="of.type==='limit'">가격 (원)<input type="number" step="any" min="0" x-model.number="of.price" class="num"></label>
+        <label class="field" x-show="of.type==='limit' || of.side==='ask'">수량 (<span x-text="symbol"></span>)<input type="number" step="any" min="0" x-model.number="of.volume" class="num"></label>
+        <label class="field" x-show="of.type==='market' && of.side==='bid'">주문총액 (원)<input type="number" step="1000" min="5000" x-model.number="of.amount" class="num"></label>
+        <div class="pct"><template x-for="p in [10,25,50,100]" :key="p"><button class="sm" @click="fillPct(p)" x-text="p+'%'"></button></template></div>
+        <div class="row muted" x-show="of.type==='limit'"><span>주문총액</span><span class="grow"></span><b class="num" style="color:var(--text)" x-text="fmt.krw((of.price||0)*(of.volume||0)) + ' 원'"></b></div>
+        <div class="hint">최소 주문 5,000원 · 수수료 0.05%</div>
+        <button :class="of.side==='bid' ? 'buy' : 'sell'" @click="submitOrder()" :disabled="busy" x-text="(of.side==='bid' ? '매수' : '매도') + (st.mode==='live' ? ' (실거래)' : ' (모의)')"></button>
+      </div>
+    </section>
+  </aside>
+
+  <!-- 하단 탭 -->
+  <section class="panel bottom" aria-label="계좌 및 정보">
+    <div class="tabs">
+      <button :class="tab==='hold' && 'on'" @click="tab='hold'">보유자산</button>
+      <button :class="tab==='open' && 'on'" @click="tab='open'; loadOrders()">미체결 <span class="badge" x-show="openOrders.length" x-text="openOrders.length"></span></button>
+      <button :class="tab==='orders' && 'on'" @click="tab='orders'; loadOrders()">주문내역</button>
+      <button :class="tab==='news' && 'on'" @click="tab='news'; loadNews()">뉴스·공시 (<span x-text="symbol"></span>)</button>
+      <button :class="tab==='logs' && 'on'" @click="tab='logs'">엔진 로그</button>
+    </div>
+    <div class="table-wrap" style="max-height:340px">
+      <table x-show="tab==='hold'">
+        <thead><tr><th>자산</th><th class="num">보유</th><th class="num">평균매수가</th><th class="num">현재가</th><th class="num">평가금액</th><th class="num">평가손익</th></tr></thead>
+        <tbody>
+          <template x-for="b in balances" :key="b.currency"><tr @click="b.currency!=='KRW' && selectMarket('KRW-'+b.currency)" style="cursor:pointer">
+            <td><b x-text="b.currency"></b></td>
+            <td class="num" x-text="b.currency==='KRW' ? fmt.krw(b.balance) : fmt.vol(b.balance + b.locked)"></td>
+            <td class="num" x-text="b.currency==='KRW' ? '' : fmt.price(b.avg_buy_price)"></td>
+            <td class="num" x-text="b.currency==='KRW' ? '' : fmt.price(b.price)"></td>
+            <td class="num" x-text="fmt.krw(b.value)"></td>
+            <td class="num" :class="fmt.cls(b.pnl)"><span x-show="b.pnl!==null" x-text="fmt.krw(b.pnl) + ' (' + fmt.pct(b.pnl_pct) + ')'"></span></td>
+          </tr></template>
+        </tbody>
+      </table>
+      <template x-if="tab==='open' || tab==='orders'">
+        <table>
+          <thead><tr><th>시간</th><th>종목</th><th>구분</th><th>유형</th><th class="num">주문가/총액</th><th class="num">수량</th><th class="num">체결가</th><th class="num">체결량</th><th>상태</th><th>사유</th><th></th></tr></thead>
+          <tbody>
+            <template x-for="o in (tab==='open' ? openOrders : orders)" :key="o.id"><tr>
+              <td x-text="fmt.time(o.created_at)"></td><td x-text="o.market"></td>
+              <td :class="o.side==='bid' ? 'up' : 'down'" x-text="SIDE[o.side]"></td><td x-text="ORD_TYPE[o.ord_type]"></td>
+              <td class="num" x-text="fmt.price(o.price)"></td><td class="num" x-text="fmt.vol(o.volume)"></td>
+              <td class="num" x-text="o.avg_price ? fmt.price(o.avg_price) : '-'"></td><td class="num" x-text="fmt.vol(o.executed_volume)"></td>
+              <td><span class="badge" :class="o.state==='done' ? 'ok' : o.state==='rejected' ? 'warn' : ''" x-text="STATE[o.state]" :title="o.error"></span></td>
+              <td class="muted" style="max-width:280px;overflow:hidden;text-overflow:ellipsis" :title="o.error || o.reason" x-text="o.error || o.reason"></td>
+              <td><button class="sm" x-show="o.state==='wait'" @click="cancelOrder(o.id)">취소</button></td>
+            </tr></template>
+          </tbody>
+        </table>
+      </template>
+      <div x-show="tab==='news'">
+        <template x-for="n in news" :key="n.id"><div class="news-item">
+          <a class="t" :href="n.url" target="_blank" rel="noopener noreferrer" x-text="n.title"></a>
+          <div class="meta"><span x-text="SOURCE[n.source] || n.source"></span><span x-text="fmt.ago(n.published_at)"></span>
+            <template x-if="IMPORTANCE[n.importance]"><span class="badge" :class="IMPORTANCE[n.importance][1]" x-text="IMPORTANCE[n.importance][0]"></span></template></div>
+        </div></template>
+        <div class="empty" x-show="!news.length">관련 뉴스가 없습니다</div>
+      </div>
+      <div x-show="tab==='logs'">
+        <template x-for="l in logs" :key="l.id"><div class="log-line" :class="l.level"><span class="muted" x-text="fmt.time(l.ts)"></span> <span x-text="l.message"></span></div></template>
+        <div class="empty" x-show="!logs.length">로그가 없습니다</div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script src="/js/common.js"></script>
+<script src="/js/trade.js"></script>
+</body>
+</html>

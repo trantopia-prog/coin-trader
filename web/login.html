@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoinTrader 로그인</title>
+<link rel="stylesheet" href="/css/app.css">
+<style>
+  .login { min-height: 100vh; display: grid; place-items: center; padding: 16px; }
+  .login form { width: min(360px, 100%); display: grid; gap: 14px; padding: 28px; }
+  .login .brand { font-size: 22px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="login">
+  <form class="panel" id="f">
+    <div class="brand">Coin<b>Trader</b></div>
+    <p class="muted center" style="margin:0">업비트 자동매매 대시보드</p>
+    <label class="field">관리자 비밀번호
+      <input type="password" id="pw" autocomplete="current-password" required autofocus>
+    </label>
+    <button class="primary" type="submit">로그인</button>
+    <p class="hint center" id="msg" role="alert"></p>
+  </form>
+</div>
+<script src="/js/common.js"></script>
+<script>
+document.getElementById('f').addEventListener('submit', async e => {
+  e.preventDefault();
+  const msg = document.getElementById('msg');
+  try {
+    const r = await API.post('/api/login', { password: document.getElementById('pw').value });
+    if (r.default_password) alert('기본 비밀번호(change-me)를 사용 중입니다. .env 의 ADMIN_PASSWORD 를 변경하세요.');
+    const next = new URLSearchParams(location.search).get('next');
+    location.href = next && next.startsWith('/') && !next.startsWith('//') ? next : '/index.html';
+  } catch (err) { msg.textContent = err.message; msg.style.color = 'var(--up)'; }
+});
+</script>
+</body>
+</html>

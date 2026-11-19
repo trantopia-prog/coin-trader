@@ -1,0 +1,74 @@
+# Windows PC 없이 GitHub 에서 설치파일을 빌드한다.
+# 저장소에 push 하거나 Actions 탭에서 수동 실행 → 완료 후 Artifacts 에서 CoinTrader-Setup 다운로드.
+# v* 태그를 push 하면 Release 에도 첨부된다.
+name: Build Windows installer
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[dev,build]"
+
+      - name: Test
+        run: python -m pytest -q -p no:warnings
+
+      - name: PyInstaller
+        run: python -m PyInstaller packaging/coin_trader.spec --noconfirm --clean
+
+      - name: Smoke test executable
+        shell: pwsh
+        env:
+          COIN_TRADER_HOME: ${{ runner.temp }}\ct-home
+          COIN_TRADER_NO_BROWSER: "1"
+        run: |
+          New-Item -ItemType Directory -Force $env:COIN_TRADER_HOME | Out-Null
+          "ADMIN_PASSWORD='smoke-test-pw'`nPORT=8123" | Set-Content -Encoding utf8 "$env:COIN_TRADER_HOME\.env"
+          # 1) 번들 점검: 트레이(pystray/Pillow), 첫 실행 창(tkinter), 서버 모듈, web 리소스
+          Start-Process dist\CoinTrader\CoinTrader.exe -ArgumentList "--self-test" -Wait
+          $log = "$env:COIN_TRADER_HOME\logs\coin-trader.log"
+          Get-Content $log
+          if (-not (Select-String -Path $log -Pattern "SELF-TEST OK" -Quiet)) { throw "번들 점검 실패" }
+          # 2) 서버 실행 점검 (CI 에는 트레이를 띄울 데스크톱 세션이 없으므로 --console 사용)
+          $p = Start-Process dist\CoinTrader\CoinTrader.exe -ArgumentList "--console" -PassThru
+          $ok = $false
+          for ($i = 0; $i -lt 60; $i++) {
+            Start-Sleep 1
+            try { $r = Invoke-WebRequest http://127.0.0.1:8123/api/me -UseBasicParsing; if ($r.StatusCode -eq 200) { $ok = $true; break } } catch {}
+          }
+          Stop-Process -Id $p.Id -Force
+          Get-Content $log -ErrorAction SilentlyContinue | Select-Object -Last 40
+          if (-not $ok) { throw "실행파일 스모크 테스트 실패" }
+
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          $ver = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}".TrimStart("v") } else { "0.1.0" }
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$ver" packaging\installer.iss
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CoinTrader-Setup
+          path: dist/installer/*.exe
+
+      - name: Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/installer/*.exe
